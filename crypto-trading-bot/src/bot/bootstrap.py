@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from typing import Callable
+
 from bot.config import BotConfig
 from bot.data.base import MarketDataProvider
 from bot.data.coinbase_public import CoinbasePublicMarketData
+from bot.data.resilient import ResilientMarketData
 from bot.execution.base import ExecutionProvider
 from bot.execution.paper import PaperExecutionProvider
 from bot.portfolio.ledger import PortfolioLedger
@@ -11,8 +14,21 @@ from bot.security import assert_paper_trading_mode
 from bot.storage import Storage
 
 
-def create_market_data_provider(config: BotConfig) -> MarketDataProvider:
-    return CoinbasePublicMarketData(product_id=config.product_id)
+def create_market_data_provider(
+    config: BotConfig,
+    *,
+    resilient: bool = True,
+    on_retry: Callable[[str, int, BaseException], None] | None = None,
+) -> MarketDataProvider:
+    inner: MarketDataProvider = CoinbasePublicMarketData(product_id=config.product_id)
+    if not resilient:
+        return inner
+    return ResilientMarketData(
+        inner,
+        retries=config.market_data_retries,
+        retry_delay_seconds=config.market_data_retry_delay_seconds,
+        on_retry=on_retry,
+    )
 
 
 def create_risk_manager(config: BotConfig) -> RiskManager:

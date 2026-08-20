@@ -103,6 +103,16 @@ class BotState:
     last_update: str | None
     total_trades: int
     realized_pnl_eur: float
+    # Phase H — long-run / idempotency (defaults keep older tests working)
+    last_processed_candle: str | None = None
+    last_successful_tick: str | None = None
+    last_error: str | None = None
+    last_error_at: str | None = None
+    session_started_at: str | None = None
+    tick_count: int = 0
+    successful_ticks: int = 0
+    failed_ticks: int = 0
+    api_error_count: int = 0
 
 
 class Storage:
@@ -144,6 +154,18 @@ class Storage:
             row = connection.execute("SELECT * FROM bot_state WHERE id = 1").fetchone()
         if row is None:
             return None
+        keys = set(row.keys())
+
+        def get_str(name: str) -> str | None:
+            if name not in keys or row[name] is None:
+                return None
+            return str(row[name])
+
+        def get_int(name: str, default: int = 0) -> int:
+            if name not in keys or row[name] is None:
+                return default
+            return int(row[name])
+
         return BotState(
             cash_eur=float(row["cash_eur"]),
             btc_amount=float(row["btc_amount"]),
@@ -155,6 +177,15 @@ class Storage:
             last_update=row["last_update"],
             total_trades=int(row["total_trades"]),
             realized_pnl_eur=float(row["realized_pnl_eur"]),
+            last_processed_candle=get_str("last_processed_candle"),
+            last_successful_tick=get_str("last_successful_tick"),
+            last_error=get_str("last_error"),
+            last_error_at=get_str("last_error_at"),
+            session_started_at=get_str("session_started_at"),
+            tick_count=get_int("tick_count"),
+            successful_ticks=get_int("successful_ticks"),
+            failed_ticks=get_int("failed_ticks"),
+            api_error_count=get_int("api_error_count"),
         )
 
     def save_state(self, state: BotState) -> None:
@@ -163,8 +194,11 @@ class Storage:
                 """
                 INSERT INTO bot_state (
                     id, cash_eur, btc_amount, entry_price, in_position, is_running,
-                    last_price, last_signal, last_update, total_trades, realized_pnl_eur
-                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_price, last_signal, last_update, total_trades, realized_pnl_eur,
+                    last_processed_candle, last_successful_tick, last_error, last_error_at,
+                    session_started_at, tick_count, successful_ticks, failed_ticks,
+                    api_error_count
+                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     cash_eur = excluded.cash_eur,
                     btc_amount = excluded.btc_amount,
@@ -175,7 +209,16 @@ class Storage:
                     last_signal = excluded.last_signal,
                     last_update = excluded.last_update,
                     total_trades = excluded.total_trades,
-                    realized_pnl_eur = excluded.realized_pnl_eur
+                    realized_pnl_eur = excluded.realized_pnl_eur,
+                    last_processed_candle = excluded.last_processed_candle,
+                    last_successful_tick = excluded.last_successful_tick,
+                    last_error = excluded.last_error,
+                    last_error_at = excluded.last_error_at,
+                    session_started_at = excluded.session_started_at,
+                    tick_count = excluded.tick_count,
+                    successful_ticks = excluded.successful_ticks,
+                    failed_ticks = excluded.failed_ticks,
+                    api_error_count = excluded.api_error_count
                 """,
                 (
                     state.cash_eur,
@@ -188,6 +231,15 @@ class Storage:
                     state.last_update,
                     state.total_trades,
                     state.realized_pnl_eur,
+                    state.last_processed_candle,
+                    state.last_successful_tick,
+                    state.last_error,
+                    state.last_error_at,
+                    state.session_started_at,
+                    state.tick_count,
+                    state.successful_ticks,
+                    state.failed_ticks,
+                    state.api_error_count,
                 ),
             )
 
@@ -240,10 +292,27 @@ class Storage:
         return [TradeRecord.from_row(row) for row in rows]
 
     def add_log(self, level: str, message: str) -> None:
+        normalized = (level or "info").strip().lower()
+        aliases = {
+            "warn": "warning",
+            "trade": "info",
+            "information": "info",
+            "err": "error",
+            "fatal": "error",
+        }
+        normalized = aliases.get(normalized, normalized)
+        if normalized not in {"info", "warning", "error"}:
+            normalized = "info"
+        # Never persist obvious secrets
+        safe_message = message
+        for needle in ("api_key", "secret", "password", "Bearer "):
+            if needle.lower() in safe_message.lower():
+                safe_message = "[redacted]"
+                break
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO logs (timestamp, level, message) VALUES (?, ?, ?)",
-                (utc_now().isoformat(), level, message),
+                (utc_now().isoformat(), normalized, safe_message),
             )
 
     def list_logs(self, limit: int = 100) -> list[dict[str, str]]:

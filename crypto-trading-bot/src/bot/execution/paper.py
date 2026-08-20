@@ -74,7 +74,7 @@ class PaperExecutionProvider(ExecutionProvider):
 
         decision = self.risk.evaluate_signal(state, signal)
         if not decision.approved:
-            self.storage.add_log("warn", decision.message)
+            self.storage.add_log("warning", decision.message)
             return state, ExecutionResult(False, decision.message)
 
         if decision.side == "buy":
@@ -94,7 +94,7 @@ class PaperExecutionProvider(ExecutionProvider):
         net_eur = budget_eur - fee_eur
         if net_eur <= 0 or execution_price <= 0:
             message = "Rejected: invalid order size after fees"
-            self.storage.add_log("warn", message)
+            self.storage.add_log("warning", message)
             return state, ExecutionResult(False, message)
 
         quantity = net_eur / execution_price
@@ -125,7 +125,7 @@ class PaperExecutionProvider(ExecutionProvider):
         )
         self._persist_fill(fill, updated)
         self.storage.add_log(
-            "trade",
+            "info",
             f"Kauf: {quantity:.8f} BTC @ {execution_price:.2f} EUR ({signal.reason})",
         )
         return updated, ExecutionResult(True, signal.reason, fill)
@@ -172,7 +172,7 @@ class PaperExecutionProvider(ExecutionProvider):
         )
         self._persist_fill(fill, updated)
         self.storage.add_log(
-            "trade",
+            "info",
             f"Verkauf: {quantity:.8f} BTC @ {execution_price:.2f} EUR "
             f"(PnL {realized_delta:+.2f} EUR, {signal.reason})",
         )

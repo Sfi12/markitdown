@@ -57,6 +57,14 @@ class BacktestConfig:
 
 
 @dataclass(frozen=True)
+class RuntimeConfig:
+    poll_interval_seconds: int
+    stale_after_seconds: int
+    market_data_retries: int
+    market_data_retry_delay_seconds: float
+
+
+@dataclass(frozen=True)
 class BotConfig:
     app: AppConfig
     trading: TradingConfig
@@ -65,7 +73,7 @@ class BotConfig:
     strategy: StrategyConfig
     market_data: MarketDataConfig
     backtest: BacktestConfig
-    poll_interval_seconds: int
+    runtime: RuntimeConfig
     database_path: Path
 
     @property
@@ -150,6 +158,22 @@ class BotConfig:
     def backtest_interval(self) -> str:
         return self.backtest.interval
 
+    @property
+    def poll_interval_seconds(self) -> int:
+        return self.runtime.poll_interval_seconds
+
+    @property
+    def stale_after_seconds(self) -> int:
+        return self.runtime.stale_after_seconds
+
+    @property
+    def market_data_retries(self) -> int:
+        return self.runtime.market_data_retries
+
+    @property
+    def market_data_retry_delay_seconds(self) -> float:
+        return self.runtime.market_data_retry_delay_seconds
+
     @classmethod
     def load(cls, path: Path | None = None) -> BotConfig:
         config_path = path or Path(__file__).resolve().parents[2] / "config.yaml"
@@ -217,6 +241,13 @@ class BotConfig:
                 period=str(backtest_raw.get("period", "1M")),
                 interval=str(backtest_raw.get("interval", "1h")),
             ),
-            poll_interval_seconds=int(bot_raw["poll_interval_seconds"]),
+            runtime=RuntimeConfig(
+                poll_interval_seconds=int(bot_raw["poll_interval_seconds"]),
+                stale_after_seconds=int(bot_raw.get("stale_after_seconds", 180)),
+                market_data_retries=int(bot_raw.get("market_data_retries", 3)),
+                market_data_retry_delay_seconds=float(
+                    bot_raw.get("market_data_retry_delay_seconds", 2.0)
+                ),
+            ),
             database_path=db_path,
         )

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from bot.storage import BotState
 
@@ -72,17 +72,16 @@ class PortfolioLedger:
         if cash_after < -1e-9 or btc_after < -1e-9:
             raise ValueError("Portfolio apply_buy would create negative balances")
 
-        return BotState(
+        return replace(
+            state,
             cash_eur=cash_after,
             btc_amount=btc_after,
             entry_price=entry_price,
             in_position=True,
-            is_running=state.is_running,
             last_price=market_price,
             last_signal=reason,
             last_update=timestamp,
             total_trades=state.total_trades + 1,
-            realized_pnl_eur=state.realized_pnl_eur,
         )
 
     def apply_sell(
@@ -101,12 +100,12 @@ class PortfolioLedger:
         if cash_after < -1e-9 or btc_after < -1e-9:
             raise ValueError("Portfolio apply_sell would create negative balances")
 
-        return BotState(
+        return replace(
+            state,
             cash_eur=cash_after,
             btc_amount=0.0 if abs(btc_after) < 1e-12 else btc_after,
             entry_price=None,
             in_position=False,
-            is_running=state.is_running,
             last_price=market_price,
             last_signal=reason,
             last_update=timestamp,

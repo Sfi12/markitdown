@@ -21,6 +21,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Nur einen Tick ausführen und beenden",
     )
+    parser.add_argument(
+        "--report-every",
+        type=int,
+        default=10,
+        help="Paper-Report alle N erfolgreichen Loop-Iterationen (0=nur am Ende)",
+    )
     return parser.parse_args()
 
 
@@ -34,21 +40,33 @@ def main() -> None:
 
     print(f"Paper-Trading gestartet für {config.product_id}")
     print(f"Startkapital: {config.start_capital_eur:.2f} EUR")
+    print(f"Stale-Grenzwert: {config.stale_after_seconds}s")
 
+    loops = 0
     try:
         while True:
             state = engine.tick()
-            portfolio = engine.trader.portfolio_value(state, state.last_price or 0.0)
+            health = engine.get_health(state)
+            price = state.last_price or 0.0
+            portfolio = engine.trader.portfolio_value(state, price)
             print(
-                f"[{state.last_update}] Preis={state.last_price:.2f} EUR | "
-                f"Portfolio={portfolio:.2f} EUR | Signal={state.last_signal}"
+                f"[{state.last_update}] {health.display} | "
+                f"Preis={price:.2f} EUR | Portfolio={portfolio:.2f} EUR | "
+                f"Signal={state.last_signal}"
             )
+            loops += 1
+            if args.report_every > 0 and loops % args.report_every == 0:
+                print(engine.get_paper_report(market_price=price).format_text())
             if args.once:
                 break
             time.sleep(config.poll_interval_seconds)
     except KeyboardInterrupt:
+        print("\nStoppe Bot…")
+    finally:
         engine.set_running(False)
-        print("\nBot gestoppt.")
+        report = engine.get_paper_report()
+        print(report.format_text())
+        print("Bot gestoppt.")
 
 
 if __name__ == "__main__":

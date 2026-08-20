@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
@@ -38,6 +38,9 @@ def migrate(database_path: Path) -> list[str]:
     Snapshots:
       price → also exposed as btc_price (column added; legacy `price` kept)
       realized_pnl / unrealized_pnl / total_pnl ← NULL for legacy rows
+
+    Schema v3 (Phase H):
+      bot_state long-run fields — last_processed_candle, tick counters, errors
     """
     steps: list[str] = []
     database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -156,6 +159,23 @@ def migrate(database_path: Path) -> list[str]:
             """
         )
         steps.append("snapshots.backfill_from_legacy")
+
+        # --- bot_state: Phase H long-run / idempotency fields ---
+        for column, definition in (
+            ("last_processed_candle", "TEXT"),
+            ("last_successful_tick", "TEXT"),
+            ("last_error", "TEXT"),
+            ("last_error_at", "TEXT"),
+            ("session_started_at", "TEXT"),
+            ("tick_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("successful_ticks", "INTEGER NOT NULL DEFAULT 0"),
+            ("failed_ticks", "INTEGER NOT NULL DEFAULT 0"),
+            ("api_error_count", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            before = column in _columns(connection, "bot_state")
+            _add_column_if_missing(connection, "bot_state", column, definition)
+            if not before:
+                steps.append(f"bot_state.add_column.{column}")
 
         connection.execute(
             "INSERT INTO schema_meta(key, value) VALUES('version', ?) "

@@ -43,8 +43,28 @@ def paper_mode_badge(trading_mode: str) -> str:
     return "PAPER TRADING"
 
 
-def bot_status_label(is_running: bool) -> str:
+def bot_status_label(is_running: bool | Any = None, *, health: Any = None) -> str:
+    """
+    Backward compatible:
+      bot_status_label(True/False) → RUNNING/STOPPED
+      bot_status_label(health=snapshot) → emoji + status
+    """
+    if health is not None:
+        emoji = getattr(health, "emoji", "")
+        label = getattr(health, "label", None) or getattr(health, "status", "UNKNOWN")
+        label_text = label.value if hasattr(label, "value") else str(label)
+        return f"{emoji} {label_text}".strip()
     return "RUNNING" if is_running else "STOPPED"
+
+
+def health_pill_class(status: str) -> str:
+    mapping = {
+        "RUNNING": "running",
+        "STOPPED": "stopped",
+        "STALE": "stale",
+        "ERROR": "error",
+    }
+    return mapping.get(status, "stopped")
 
 
 def humanize_reason(reason: str | None) -> str:
@@ -180,6 +200,7 @@ def settings_rows(config: Any) -> list[tuple[str, str]]:
         ("RSI Exit", str(config.rsi_exit)),
         ("Backtest Period", str(getattr(config, "backtest_period", "n/a"))),
         ("Backtest Interval", str(getattr(config, "backtest_interval", "n/a"))),
+        ("Stale After (s)", str(getattr(config, "stale_after_seconds", "n/a"))),
     ]
 
 

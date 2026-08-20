@@ -21,6 +21,7 @@ from dashboard.helpers import (
     filter_logs,
     format_eur,
     format_pct,
+    health_pill_class,
     humanize_reason,
     paper_mode_badge,
     settings_rows,
@@ -76,7 +77,9 @@ def inject_styles(theme: str) -> None:
         }}
         .pill.paper {{ color: {paper}; border-color: {paper}55; background: {paper}14; }}
         .pill.running {{ color: {positive}; border-color: {positive}55; background: {positive}14; }}
-        .pill.stopped {{ color: {negative}; border-color: {negative}55; background: {negative}14; }}
+        .pill.stopped {{ color: {muted}; border-color: {border}; background: transparent; }}
+        .pill.stale {{ color: #ffd60a; border-color: #ffd60a55; background: #ffd60a14; }}
+        .pill.error {{ color: {negative}; border-color: {negative}55; background: {negative}14; }}
         .metric-grid {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
@@ -147,8 +150,9 @@ def cached_indicator_frame(_product_id: str, _granularity: int, _limit: int):
 
 def render_header(state, theme: str) -> None:
     inject_styles(theme)
-    running = bot_status_label(state.is_running)
-    running_class = "running" if state.is_running else "stopped"
+    health = ENGINE.get_health(state)
+    status_text = bot_status_label(health=health)
+    running_class = health_pill_class(health.label)
     st.markdown(
         f"""
         <div class="cockpit-header">
@@ -159,7 +163,7 @@ def render_header(state, theme: str) -> None:
         </div>
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.9rem;">
           <span class="pill paper">{paper_mode_badge(CONFIG.trading_mode)}</span>
-          <span class="pill {running_class}">{running}</span>
+          <span class="pill {running_class}">{status_text}</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -168,6 +172,8 @@ def render_header(state, theme: str) -> None:
 
 def render_overview(state, price: float, market_error: str | None) -> None:
     metrics = ENGINE.get_performance(market_price=price if price else None)
+    health = ENGINE.get_health(state)
+    report = ENGINE.get_paper_report(market_price=price if price else None)
     st.markdown(metric_html(build_overview_cards(metrics)), unsafe_allow_html=True)
 
     col_a, col_b = st.columns(2)
@@ -175,9 +181,17 @@ def render_overview(state, price: float, market_error: str | None) -> None:
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
         st.markdown('<div class="section-title">Bot-Status</div>', unsafe_allow_html=True)
         st.write(f"**Modus:** {paper_mode_badge(CONFIG.trading_mode)}")
-        st.write(f"**Status:** {bot_status_label(state.is_running)}")
-        st.write(f"**Letzter Tick:** {state.last_update or '—'}")
-        st.write(f"**Letzter Datenabruf:** {state.last_update or '—'}")
+        st.write(f"**Status:** {bot_status_label(health=health)}")
+        st.write(f"**Last successful tick:** {state.last_successful_tick or state.last_update or '—'}")
+        st.write(f"**Last market-data update:** {state.last_update or '—'}")
+        runtime = "—"
+        if report.runtime_seconds is not None:
+            runtime = f"{report.runtime_seconds / 3600:.2f} h"
+        st.write(f"**Runtime:** {runtime}")
+        st.write(f"**Trade count:** {report.trades}")
+        st.write(f"**Portfolio value:** {format_eur(report.portfolio_value)}")
+        if state.last_error:
+            st.write(f"**Last error:** {state.last_error}")
         if market_error:
             st.warning(f"Marktdaten: {market_error}")
         st.markdown("</div>", unsafe_allow_html=True)
