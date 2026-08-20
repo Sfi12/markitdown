@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from bot.storage_migrate import migrate
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -14,19 +16,79 @@ def utc_now() -> datetime:
 
 @dataclass
 class TradeRecord:
+    """Persisted trade aligned with TradeFill (+ legacy compatibility fields)."""
+
     id: int | None
     timestamp: str
     side: str
-    price: float
-    amount_eur: float
-    amount_btc: float
-    fee_eur: float
     reason: str
     balance_eur_after: float
     balance_btc_after: float
+    # TradeFill fields
+    symbol: str | None = None
+    requested_price: float | None = None
+    execution_price: float | None = None
+    quantity: float | None = None
+    gross_value: float | None = None
+    fee: float | None = None
+    slippage: float | None = None
+    net_value: float | None = None
+    pnl: float | None = None
+    # Legacy columns (kept for backward compatibility)
+    price: float | None = None
+    amount_eur: float | None = None
+    amount_btc: float | None = None
+    fee_eur: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> TradeRecord:
+        keys = set(row.keys())
+
+        def get_float(name: str) -> float | None:
+            if name not in keys or row[name] is None:
+                return None
+            return float(row[name])
+
+        execution_price = get_float("execution_price")
+        if execution_price is None:
+            execution_price = get_float("price")
+
+        quantity = get_float("quantity")
+        if quantity is None:
+            quantity = get_float("amount_btc")
+
+        gross_value = get_float("gross_value")
+        if gross_value is None:
+            gross_value = get_float("amount_eur")
+
+        fee = get_float("fee")
+        if fee is None:
+            fee = get_float("fee_eur")
+
+        return cls(
+            id=int(row["id"]) if row["id"] is not None else None,
+            timestamp=row["timestamp"],
+            side=row["side"],
+            reason=row["reason"],
+            balance_eur_after=float(row["balance_eur_after"]),
+            balance_btc_after=float(row["balance_btc_after"]),
+            symbol=row["symbol"] if "symbol" in keys else None,
+            requested_price=get_float("requested_price"),
+            execution_price=execution_price,
+            quantity=quantity,
+            gross_value=gross_value,
+            fee=fee,
+            slippage=get_float("slippage"),
+            net_value=get_float("net_value"),
+            pnl=get_float("pnl"),
+            price=get_float("price"),
+            amount_eur=get_float("amount_eur"),
+            amount_btc=get_float("amount_btc"),
+            fee_eur=get_float("fee_eur"),
+        )
 
 
 @dataclass
@@ -55,53 +117,7 @@ class Storage:
         return connection
 
     def _init_db(self) -> None:
-        with self._connect() as connection:
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS bot_state (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    cash_eur REAL NOT NULL,
-                    btc_amount REAL NOT NULL,
-                    entry_price REAL,
-                    in_position INTEGER NOT NULL,
-                    is_running INTEGER NOT NULL,
-                    last_price REAL,
-                    last_signal TEXT NOT NULL,
-                    last_update TEXT,
-                    total_trades INTEGER NOT NULL,
-                    realized_pnl_eur REAL NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS trades (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    side TEXT NOT NULL,
-                    price REAL NOT NULL,
-                    amount_eur REAL NOT NULL,
-                    amount_btc REAL NOT NULL,
-                    fee_eur REAL NOT NULL,
-                    reason TEXT NOT NULL,
-                    balance_eur_after REAL NOT NULL,
-                    balance_btc_after REAL NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    level TEXT NOT NULL,
-                    message TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS snapshots (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    price REAL NOT NULL,
-                    portfolio_value_eur REAL NOT NULL,
-                    cash_eur REAL NOT NULL,
-                    btc_amount REAL NOT NULL
-                );
-                """
-            )
+        migrate(self.database_path)
 
     def ensure_state(self, start_capital_eur: float) -> BotState:
         state = self.get_state()
@@ -176,24 +192,42 @@ class Storage:
             )
 
     def add_trade(self, trade: TradeRecord) -> None:
+        execution_price = trade.execution_price if trade.execution_price is not None else trade.price
+        quantity = trade.quantity if trade.quantity is not None else trade.amount_btc
+        gross_value = trade.gross_value if trade.gross_value is not None else trade.amount_eur
+        fee = trade.fee if trade.fee is not None else trade.fee_eur
+        if execution_price is None or quantity is None or gross_value is None or fee is None:
+            raise ValueError("TradeRecord missing required price/quantity/gross/fee fields")
+
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO trades (
                     timestamp, side, price, amount_eur, amount_btc, fee_eur, reason,
-                    balance_eur_after, balance_btc_after
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    balance_eur_after, balance_btc_after,
+                    symbol, requested_price, execution_price, quantity, gross_value,
+                    fee, slippage, net_value, pnl
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     trade.timestamp,
                     trade.side,
-                    trade.price,
-                    trade.amount_eur,
-                    trade.amount_btc,
-                    trade.fee_eur,
+                    execution_price,
+                    gross_value,
+                    quantity,
+                    fee,
                     trade.reason,
                     trade.balance_eur_after,
                     trade.balance_btc_after,
+                    trade.symbol,
+                    trade.requested_price,
+                    execution_price,
+                    quantity,
+                    gross_value,
+                    fee,
+                    trade.slippage,
+                    trade.net_value,
+                    trade.pnl,
                 ),
             )
 
@@ -203,21 +237,7 @@ class Storage:
                 "SELECT * FROM trades ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
-        return [
-            TradeRecord(
-                id=int(row["id"]),
-                timestamp=row["timestamp"],
-                side=row["side"],
-                price=float(row["price"]),
-                amount_eur=float(row["amount_eur"]),
-                amount_btc=float(row["amount_btc"]),
-                fee_eur=float(row["fee_eur"]),
-                reason=row["reason"],
-                balance_eur_after=float(row["balance_eur_after"]),
-                balance_btc_after=float(row["balance_btc_after"]),
-            )
-            for row in rows
-        ]
+        return [TradeRecord.from_row(row) for row in rows]
 
     def add_log(self, level: str, message: str) -> None:
         with self._connect() as connection:
@@ -247,19 +267,30 @@ class Storage:
         portfolio_value_eur: float,
         cash_eur: float,
         btc_amount: float,
+        realized_pnl: float | None = None,
+        unrealized_pnl: float | None = None,
+        total_pnl: float | None = None,
+        timestamp: str | None = None,
     ) -> None:
         with self._connect() as connection:
             connection.execute(
                 """
-                INSERT INTO snapshots (timestamp, price, portfolio_value_eur, cash_eur, btc_amount)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO snapshots (
+                    timestamp, price, portfolio_value_eur, cash_eur, btc_amount,
+                    btc_price, portfolio_value, realized_pnl, unrealized_pnl, total_pnl
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    utc_now().isoformat(),
+                    timestamp or utc_now().isoformat(),
                     price,
                     portfolio_value_eur,
                     cash_eur,
                     btc_amount,
+                    price,
+                    portfolio_value_eur,
+                    realized_pnl,
+                    unrealized_pnl,
+                    total_pnl,
                 ),
             )
 
@@ -286,5 +317,6 @@ class Storage:
             "state": asdict(state) if state else None,
             "trades": [trade.to_dict() for trade in self.list_trades(limit=1000)],
             "logs": self.list_logs(limit=200),
+            "snapshots": self.list_snapshots(limit=1000),
         }
         return json.dumps(payload, indent=2, ensure_ascii=False)

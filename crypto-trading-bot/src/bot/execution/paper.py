@@ -179,18 +179,27 @@ class PaperExecutionProvider(ExecutionProvider):
         return updated, ExecutionResult(True, signal.reason, fill)
 
     def _persist_fill(self, fill: TradeFill, state: BotState) -> None:
-        """Persist using the existing SQLite trade schema (Phase E will migrate)."""
+        """Persist TradeFill fields; legacy columns mirrored for compatibility."""
         self.storage.add_trade(
             TradeRecord(
                 id=None,
                 timestamp=fill.timestamp,
                 side=fill.side,
+                reason=fill.reason,
+                balance_eur_after=state.cash_eur,
+                balance_btc_after=state.btc_amount,
+                symbol=fill.symbol,
+                requested_price=fill.requested_price,
+                execution_price=fill.execution_price,
+                quantity=fill.quantity,
+                gross_value=fill.gross_value,
+                fee=fill.fee,
+                slippage=fill.slippage,
+                net_value=fill.net_value,
+                pnl=fill.pnl,
                 price=fill.execution_price,
                 amount_eur=fill.gross_value,
                 amount_btc=fill.quantity,
                 fee_eur=fill.fee,
-                reason=fill.reason,
-                balance_eur_after=state.cash_eur,
-                balance_btc_after=state.btc_amount,
             )
         )

@@ -1,5 +1,6 @@
 app:
   trading_mode: paper
+  timezone: Europe/Berlin
 
 trading:
   product_id: BTC-EUR

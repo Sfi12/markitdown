@@ -13,6 +13,7 @@ from bot.bootstrap import (
 from bot.config import BotConfig
 from bot.data.base import MarketDataProvider
 from bot.execution.base import ExecutionProvider
+from bot.performance import PerformanceCalculator, PerformanceMetrics
 from bot.portfolio.ledger import PortfolioLedger
 from bot.risk.manager import RiskManager
 from bot.security import enforce_paper_trading_startup
@@ -31,6 +32,7 @@ class BacktestResult:
     losing_trades: int
     max_drawdown_pct: float
     trades: list[dict[str, float | str]]
+    metrics: PerformanceMetrics | None = None
 
 
 class TradingEngine:
@@ -61,6 +63,10 @@ class TradingEngine:
             rsi_entry=config.rsi_entry,
             rsi_exit=config.rsi_exit,
         )
+        self.performance = PerformanceCalculator(
+            start_capital=config.start_capital_eur,
+            timezone_name=config.timezone,
+        )
 
     @property
     def market(self) -> MarketDataProvider:
@@ -76,6 +82,18 @@ class TradingEngine:
         state = self.storage.ensure_state(self.config.start_capital_eur)
         self.storage.add_log("info", "Paper-Trading-Bot initialisiert")
         return state
+
+    def get_performance(self, market_price: float | None = None) -> PerformanceMetrics:
+        state = self.storage.ensure_state(self.config.start_capital_eur)
+        price = market_price
+        if price is None:
+            price = state.last_price if state.last_price is not None else 0.0
+        return self.performance.compute(
+            state=state,
+            market_price=float(price),
+            trades=self.storage.list_trades(limit=10_000),
+            snapshots=self.storage.list_snapshots(limit=10_000),
+        )
 
     def tick(self) -> BotState:
         state = self.storage.ensure_state(self.config.start_capital_eur)
@@ -112,16 +130,15 @@ class TradingEngine:
             if not result.executed and signal.action != SignalAction.HOLD:
                 self.storage.add_log("info", result.message)
 
-        portfolio_value = self.portfolio.portfolio_value(
-            state.cash_eur,
-            state.btc_amount,
-            spot_price,
-        )
+        snap = self.portfolio.snapshot(state, spot_price)
         self.storage.add_snapshot(
             price=spot_price,
-            portfolio_value_eur=portfolio_value,
+            portfolio_value_eur=snap.portfolio_value,
             cash_eur=state.cash_eur,
             btc_amount=state.btc_amount,
+            realized_pnl=snap.realized_pnl,
+            unrealized_pnl=snap.unrealized_pnl,
+            total_pnl=snap.total_pnl,
         )
         self.storage.save_state(state)
         return state
@@ -163,6 +180,10 @@ class Backtester:
         self.market_data = market_data or create_market_data_provider(config)
         self.risk = create_risk_manager(config)
         self.portfolio = create_portfolio_ledger(config)
+        self.performance = PerformanceCalculator(
+            start_capital=config.start_capital_eur,
+            timezone_name=config.timezone,
+        )
         self.strategy = EmaRsiStrategy(
             ema_fast=config.ema_fast,
             ema_slow=config.ema_slow,
@@ -204,8 +225,9 @@ class Backtester:
         entry_price: float | None = None
         in_position = False
         trades: list[dict[str, float | str]] = []
-        peak_value = cash_eur
-        max_drawdown_pct = 0.0
+        sell_pnls: list[float] = []
+        total_fees = 0.0
+        equity_curve: list[float] = [self.config.start_capital_eur]
         winning = 0
         losing = 0
 
@@ -223,7 +245,7 @@ class Backtester:
                 last_signal="",
                 last_update=None,
                 total_trades=len(trades),
-                realized_pnl_eur=0.0,
+                realized_pnl_eur=sum(sell_pnls),
             )
 
             risk_signal = self.risk.check_exits(state, price)
@@ -241,11 +263,13 @@ class Backtester:
                     ema_slow=signal.ema_slow,
                     rsi=signal.rsi,
                 )
-                previous_cash = cash_eur
                 state, result = self.execution.execute_signal(state, signal)
-                if result.executed:
+                if result.executed and result.fill is not None:
+                    fill = result.fill
+                    total_fees += fill.fee
                     if signal.action == SignalAction.SELL:
-                        pnl = state.cash_eur - previous_cash
+                        pnl = float(fill.pnl)
+                        sell_pnls.append(pnl)
                         if pnl >= 0:
                             winning += 1
                         else:
@@ -256,6 +280,7 @@ class Backtester:
                                 "side": "sell",
                                 "price": price,
                                 "pnl_eur": pnl,
+                                "fee": fill.fee,
                                 "reason": signal.reason,
                             }
                         )
@@ -266,6 +291,7 @@ class Backtester:
                                 "side": "buy",
                                 "price": price,
                                 "pnl_eur": 0.0,
+                                "fee": fill.fee,
                                 "reason": signal.reason,
                             }
                         )
@@ -275,27 +301,29 @@ class Backtester:
                     in_position = state.in_position
 
             portfolio_value = cash_eur + (btc_amount * price)
-            peak_value = max(peak_value, portfolio_value)
-            if peak_value > 0:
-                drawdown = ((peak_value - portfolio_value) / peak_value) * 100
-                max_drawdown_pct = max(max_drawdown_pct, drawdown)
+            equity_curve.append(portfolio_value)
 
         final_price = float(enriched.iloc[-1]["close"])
         end_capital = cash_eur + (btc_amount * final_price)
-        total_return_pct = (
-            ((end_capital - self.config.start_capital_eur) / self.config.start_capital_eur)
-            * 100
+        metrics = self.performance.from_backtest_trades(
+            start_capital=self.config.start_capital_eur,
+            end_capital=end_capital,
+            sell_pnls=sell_pnls,
+            total_fees=total_fees,
+            equity_curve=equity_curve,
         )
+        total_return_pct = (metrics.total_return or 0.0) * 100.0
 
         return BacktestResult(
             start_capital_eur=self.config.start_capital_eur,
             end_capital_eur=end_capital,
             total_return_pct=total_return_pct,
-            total_trades=len([trade for trade in trades if trade["side"] == "sell"]),
+            total_trades=len(sell_pnls),
             winning_trades=winning,
             losing_trades=losing,
-            max_drawdown_pct=max_drawdown_pct,
+            max_drawdown_pct=metrics.max_drawdown_pct or 0.0,
             trades=trades,
+            metrics=metrics,
         )
 
 

@@ -13,6 +13,7 @@ from bot.security import PAPER_MODE, TRADING_MODE_ENV
 @dataclass(frozen=True)
 class AppConfig:
     trading_mode: str
+    timezone: str
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,10 @@ class BotConfig:
     @property
     def trading_mode(self) -> str:
         return self.app.trading_mode
+
+    @property
+    def timezone(self) -> str:
+        return self.app.timezone
 
     @property
     def product_id(self) -> str:
@@ -156,7 +161,10 @@ class BotConfig:
             db_path = config_path.parent / db_path
 
         return cls(
-            app=AppConfig(trading_mode=str(trading_mode)),
+            app=AppConfig(
+                trading_mode=str(trading_mode),
+                timezone=str(app_raw.get("timezone", "Europe/Berlin")),
+            ),
             trading=TradingConfig(
                 product_id=trading_raw["product_id"],
                 start_capital_eur=float(trading_raw["start_capital_eur"]),
