@@ -1,6 +1,6 @@
-data/
+/data/
 .venv/
 __pycache__/
 *.pyc
 *.db
-backups/
+/backups/
