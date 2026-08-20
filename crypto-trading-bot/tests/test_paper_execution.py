@@ -51,7 +51,7 @@ def base_state(**overrides) -> BotState:
 def buy_signal(price: float = 100.0) -> StrategySignal:
     return StrategySignal(
         action=SignalAction.BUY,
-        reason="test buy",
+        reason="EMA20 above EMA50 and RSI above 50",
         price=price,
         ema_fast=1.0,
         ema_slow=0.5,
@@ -59,10 +59,10 @@ def buy_signal(price: float = 100.0) -> StrategySignal:
     )
 
 
-def sell_signal(price: float = 100.0) -> StrategySignal:
+def sell_signal(price: float = 100.0, reason: str = "EMA20 below EMA50") -> StrategySignal:
     return StrategySignal(
         action=SignalAction.SELL,
-        reason="test sell",
+        reason=reason,
         price=price,
         ema_fast=0.5,
         ema_slow=1.0,
@@ -79,6 +79,8 @@ def test_paper_buy_respects_position_size() -> None:
     assert updated.cash_eur == 40.0
     assert updated.in_position is True
     assert updated.btc_amount > 0
+    assert result.fill is not None
+    assert result.fill.gross_value == 10.0
 
 
 def test_paper_buy_rejects_when_already_in_position() -> None:
@@ -137,6 +139,8 @@ def test_paper_sell_closes_position() -> None:
     assert updated.in_position is False
     assert updated.btc_amount == 0.0
     assert updated.cash_eur > 40.0
+    assert result.fill is not None
+    assert result.fill.pnl != 0.0
 
 
 def test_sell_without_position_rejected() -> None:
@@ -159,4 +163,62 @@ def test_slippage_default_0_10_percent() -> None:
     buy_price = provider.apply_slippage(100.0, "buy")
     sell_price = provider.apply_slippage(100.0, "sell")
     assert buy_price == pytest.approx(100.10)
-    assert sell_price == pytest.approx(99.9000999000999)
+    assert sell_price == pytest.approx(99.90)
+
+
+def test_buy_fee_0_60_percent() -> None:
+    provider = make_provider()
+    _, result = provider.execute_signal(base_state(), buy_signal(100.0))
+    assert result.fill is not None
+    assert result.fill.fee == pytest.approx(10.0 * 0.006)
+    assert result.fill.net_value == pytest.approx(10.0 - result.fill.fee)
+
+
+def test_sell_fee_0_60_percent() -> None:
+    provider = make_provider()
+    state = base_state(cash_eur=40.0, btc_amount=0.1, entry_price=100.0, in_position=True)
+    _, result = provider.execute_signal(state, sell_signal(100.0))
+    assert result.fill is not None
+    expected_gross = 0.1 * 99.90
+    assert result.fill.gross_value == pytest.approx(expected_gross)
+    assert result.fill.fee == pytest.approx(expected_gross * 0.006)
+
+
+def test_buy_quantity_uses_execution_price() -> None:
+    provider = make_provider()
+    _, result = provider.execute_signal(base_state(), buy_signal(100.0))
+    assert result.fill is not None
+    assert result.fill.execution_price == pytest.approx(100.10)
+    assert result.fill.quantity == pytest.approx(result.fill.net_value / 100.10)
+
+
+def test_trade_fill_fields_complete() -> None:
+    provider = make_provider()
+    _, result = provider.execute_signal(base_state(), buy_signal(100.0))
+    fill = result.fill
+    assert fill is not None
+    for field in (
+        "side",
+        "symbol",
+        "requested_price",
+        "execution_price",
+        "quantity",
+        "gross_value",
+        "fee",
+        "slippage",
+        "net_value",
+        "pnl",
+        "reason",
+        "timestamp",
+    ):
+        assert hasattr(fill, field)
+
+
+def test_cash_less_than_10_limits_trade() -> None:
+    provider = make_provider()
+    state = base_state(cash_eur=7.0)
+    updated, result = provider.execute_signal(state, buy_signal(100.0))
+    assert result.executed is True
+    assert result.fill is not None
+    assert result.fill.gross_value == 7.0
+    assert updated.cash_eur == 0.0

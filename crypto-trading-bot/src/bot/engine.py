@@ -4,10 +4,17 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from bot.bootstrap import create_execution_provider, create_market_data_provider
+from bot.bootstrap import (
+    create_execution_provider,
+    create_market_data_provider,
+    create_portfolio_ledger,
+    create_risk_manager,
+)
 from bot.config import BotConfig
 from bot.data.base import MarketDataProvider
 from bot.execution.base import ExecutionProvider
+from bot.portfolio.ledger import PortfolioLedger
+from bot.risk.manager import RiskManager
 from bot.security import enforce_paper_trading_startup
 from bot.storage import BotState, Storage
 from bot.storage import utc_now
@@ -32,12 +39,21 @@ class TradingEngine:
         config: BotConfig,
         market_data: MarketDataProvider | None = None,
         execution: ExecutionProvider | None = None,
+        risk: RiskManager | None = None,
+        portfolio: PortfolioLedger | None = None,
     ) -> None:
         enforce_paper_trading_startup(config.trading_mode)
         self.config = config
         self.storage = Storage(config.database_path)
         self.market_data = market_data or create_market_data_provider(config)
-        self.execution = execution or create_execution_provider(config, self.storage)
+        self.risk = risk or create_risk_manager(config)
+        self.portfolio = portfolio or create_portfolio_ledger(config)
+        self.execution = execution or create_execution_provider(
+            config,
+            self.storage,
+            risk=self.risk,
+            portfolio=self.portfolio,
+        )
         self.strategy = EmaRsiStrategy(
             ema_fast=config.ema_fast,
             ema_slow=config.ema_slow,
@@ -69,7 +85,7 @@ class TradingEngine:
         )
         spot_price = self.market_data.fetch_spot_price()
 
-        risk_signal = self.execution.check_risk_exits(state, spot_price)
+        risk_signal = self.risk.check_exits(state, spot_price)
         if risk_signal is not None:
             signal = risk_signal
         else:
@@ -96,7 +112,11 @@ class TradingEngine:
             if not result.executed and signal.action != SignalAction.HOLD:
                 self.storage.add_log("info", result.message)
 
-        portfolio_value = self.execution.portfolio_value(state, spot_price)
+        portfolio_value = self.portfolio.portfolio_value(
+            state.cash_eur,
+            state.btc_amount,
+            spot_price,
+        )
         self.storage.add_snapshot(
             price=spot_price,
             portfolio_value_eur=portfolio_value,
@@ -141,6 +161,8 @@ class Backtester:
         enforce_paper_trading_startup(config.trading_mode)
         self.config = config
         self.market_data = market_data or create_market_data_provider(config)
+        self.risk = create_risk_manager(config)
+        self.portfolio = create_portfolio_ledger(config)
         self.strategy = EmaRsiStrategy(
             ema_fast=config.ema_fast,
             ema_slow=config.ema_slow,
@@ -148,7 +170,12 @@ class Backtester:
             rsi_entry=config.rsi_entry,
             rsi_exit=config.rsi_exit,
         )
-        self.execution = create_execution_provider(config, storage=_NullStorage())
+        self.execution = create_execution_provider(
+            config,
+            storage=_NullStorage(),
+            risk=self.risk,
+            portfolio=self.portfolio,
+        )
 
     @property
     def market(self) -> MarketDataProvider:
@@ -199,7 +226,7 @@ class Backtester:
                 realized_pnl_eur=0.0,
             )
 
-            risk_signal = self.execution.check_risk_exits(state, price)
+            risk_signal = self.risk.check_exits(state, price)
             signal = risk_signal or self.strategy.evaluate(
                 window,
                 in_position=in_position,
