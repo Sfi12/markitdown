@@ -49,7 +49,7 @@ class PaperExecutionProvider(ExecutionProvider):
         if change_pct <= -self.stop_loss_pct:
             return StrategySignal(
                 action=SignalAction.SELL,
-                reason=f"Stop-Loss ({self.stop_loss_pct:.1f}%)",
+                reason="stop_loss",
                 price=price,
                 ema_fast=0.0,
                 ema_slow=0.0,
@@ -58,7 +58,7 @@ class PaperExecutionProvider(ExecutionProvider):
         if change_pct >= self.take_profit_pct:
             return StrategySignal(
                 action=SignalAction.SELL,
-                reason=f"Take-Profit ({self.take_profit_pct:.1f}%)",
+                reason="take_profit",
                 price=price,
                 ema_fast=0.0,
                 ema_slow=0.0,

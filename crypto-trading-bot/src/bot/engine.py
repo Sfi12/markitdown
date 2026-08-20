@@ -11,7 +11,7 @@ from bot.execution.base import ExecutionProvider
 from bot.security import enforce_paper_trading_startup
 from bot.storage import BotState, Storage
 from bot.storage import utc_now
-from bot.strategy import SignalAction, TrendRsiStrategy, add_indicators
+from bot.strategy import EmaRsiStrategy, SignalAction, add_indicators
 
 
 @dataclass(frozen=True)
@@ -38,12 +38,12 @@ class TradingEngine:
         self.storage = Storage(config.database_path)
         self.market_data = market_data or create_market_data_provider(config)
         self.execution = execution or create_execution_provider(config, self.storage)
-        self.strategy = TrendRsiStrategy(
+        self.strategy = EmaRsiStrategy(
             ema_fast=config.ema_fast,
             ema_slow=config.ema_slow,
             rsi_period=config.rsi_period,
-            rsi_oversold=config.rsi_oversold,
-            rsi_overbought=config.rsi_overbought,
+            rsi_entry=config.rsi_entry,
+            rsi_exit=config.rsi_exit,
         )
 
     @property
@@ -73,7 +73,11 @@ class TradingEngine:
         if risk_signal is not None:
             signal = risk_signal
         else:
-            signal = self.strategy.evaluate(candles, in_position=state.in_position)
+            signal = self.strategy.evaluate(
+                candles,
+                in_position=state.in_position,
+                exclude_open_candle=True,
+            )
 
         state.last_price = spot_price
         state.last_signal = signal.reason
@@ -137,12 +141,12 @@ class Backtester:
         enforce_paper_trading_startup(config.trading_mode)
         self.config = config
         self.market_data = market_data or create_market_data_provider(config)
-        self.strategy = TrendRsiStrategy(
+        self.strategy = EmaRsiStrategy(
             ema_fast=config.ema_fast,
             ema_slow=config.ema_slow,
             rsi_period=config.rsi_period,
-            rsi_oversold=config.rsi_oversold,
-            rsi_overbought=config.rsi_overbought,
+            rsi_entry=config.rsi_entry,
+            rsi_exit=config.rsi_exit,
         )
         self.execution = create_execution_provider(config, storage=_NullStorage())
 
@@ -196,7 +200,11 @@ class Backtester:
             )
 
             risk_signal = self.execution.check_risk_exits(state, price)
-            signal = risk_signal or self.strategy.evaluate(window, in_position=in_position)
+            signal = risk_signal or self.strategy.evaluate(
+                window,
+                in_position=in_position,
+                exclude_open_candle=False,
+            )
             if signal.action in (SignalAction.BUY, SignalAction.SELL):
                 signal = signal.__class__(
                     action=signal.action,

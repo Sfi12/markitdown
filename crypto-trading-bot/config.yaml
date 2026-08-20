@@ -12,14 +12,14 @@ risk:
 
 execution:
   fee_pct: 0.6
-  slippage_pct: 0.05
+  slippage_pct: 0.10
 
 strategy:
   ema_fast: 20
   ema_slow: 50
   rsi_period: 14
-  rsi_oversold: 35
-  rsi_overbought: 70
+  rsi_entry: 50
+  rsi_exit: 45
 
 data:
   candle_granularity: 3600

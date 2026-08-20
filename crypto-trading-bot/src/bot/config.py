@@ -39,8 +39,8 @@ class StrategyConfig:
     ema_fast: int
     ema_slow: int
     rsi_period: int
-    rsi_oversold: float
-    rsi_overbought: float
+    rsi_entry: float
+    rsi_exit: float
 
 
 @dataclass(frozen=True)
@@ -105,12 +105,22 @@ class BotConfig:
         return self.strategy.rsi_period
 
     @property
+    def rsi_entry(self) -> float:
+        return self.strategy.rsi_entry
+
+    @property
+    def rsi_exit(self) -> float:
+        return self.strategy.rsi_exit
+
+    @property
     def rsi_oversold(self) -> float:
-        return self.strategy.rsi_oversold
+        """Deprecated alias — use rsi_exit."""
+        return self.strategy.rsi_exit
 
     @property
     def rsi_overbought(self) -> float:
-        return self.strategy.rsi_overbought
+        """Deprecated alias — use rsi_entry."""
+        return self.strategy.rsi_entry
 
     @property
     def candle_granularity(self) -> int:
@@ -165,15 +175,15 @@ class BotConfig:
             execution=ExecutionConfig(
                 fee_pct=float(execution_raw.get("fee_pct", trading_raw.get("fee_pct", 0.6))),
                 slippage_pct=float(
-                    execution_raw.get("slippage_pct", trading_raw.get("slippage_pct", 0.05))
+                    execution_raw.get("slippage_pct", trading_raw.get("slippage_pct", 0.10))
                 ),
             ),
             strategy=StrategyConfig(
                 ema_fast=int(strategy_raw["ema_fast"]),
                 ema_slow=int(strategy_raw["ema_slow"]),
                 rsi_period=int(strategy_raw["rsi_period"]),
-                rsi_oversold=float(strategy_raw["rsi_oversold"]),
-                rsi_overbought=float(strategy_raw["rsi_overbought"]),
+                rsi_entry=float(strategy_raw.get("rsi_entry", 50.0)),
+                rsi_exit=float(strategy_raw.get("rsi_exit", 45.0)),
             ),
             market_data=MarketDataConfig(
                 candle_granularity=int(data_raw["candle_granularity"]),
