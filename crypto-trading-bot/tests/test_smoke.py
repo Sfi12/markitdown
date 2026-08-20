@@ -38,12 +38,13 @@ def test_dashboard_import_smoke() -> None:
         [
             sys.executable,
             "-c",
-            "import sys; sys.path.insert(0, 'src'); "
+            "import sys; sys.path[:0] = ['.', 'src']; "
             "import importlib.util; "
             "spec = importlib.util.spec_from_file_location('dash', 'dashboard/app.py'); "
             "mod = importlib.util.module_from_spec(spec); "
             "spec.loader.exec_module(mod); "
-            "assert mod.CONFIG.trading_mode == 'paper'",
+            "assert mod.CONFIG.trading_mode == 'paper'; "
+            "assert 'PAPER TRADING' == __import__('dashboard.helpers', fromlist=['paper_mode_badge']).paper_mode_badge('paper')",
         ],
         cwd=ROOT,
         capture_output=True,
