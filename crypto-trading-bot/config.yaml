@@ -1,0 +1,29 @@
+trading:
+  product_id: BTC-EUR
+  start_capital_eur: 50.0
+  max_trade_eur: 10.0
+  stop_loss_pct: 1.5
+  take_profit_pct: 3.0
+  fee_pct: 0.6
+  slippage_pct: 0.05
+
+strategy:
+  ema_fast: 20
+  ema_slow: 50
+  rsi_period: 14
+  rsi_oversold: 35
+  rsi_overbought: 70
+
+data:
+  candle_granularity: 3600
+  candle_limit: 300
+
+bot:
+  poll_interval_seconds: 60
+
+storage:
+  database_path: data/bot.db
+
+dashboard:
+  host: 0.0.0.0
+  port: 8501
