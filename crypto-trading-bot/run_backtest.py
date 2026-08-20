@@ -9,10 +9,12 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from bot.config import BotConfig
 from bot.engine import Backtester
+from bot.security import enforce_paper_trading_startup
 
 
 def main() -> None:
     config = BotConfig.load(ROOT / "config.yaml")
+    enforce_paper_trading_startup(config.trading_mode)
     result = Backtester(config).run()
 
     print("=== Backtest Ergebnis ===")

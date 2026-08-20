@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from bot.config import BotConfig
 from bot.engine import TradingEngine
+from bot.security import enforce_paper_trading_startup
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,6 +27,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     config = BotConfig.load(ROOT / "config.yaml")
+    enforce_paper_trading_startup(config.trading_mode)
     engine = TradingEngine(config)
     state = engine.initialize()
     engine.set_running(True)

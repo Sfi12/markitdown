@@ -4,9 +4,11 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from bot.bootstrap import create_execution_provider, create_market_data_provider
 from bot.config import BotConfig
-from bot.market_data import MarketDataClient
-from bot.paper_trader import PaperTrader
+from bot.data.base import MarketDataProvider
+from bot.execution.base import ExecutionProvider
+from bot.security import enforce_paper_trading_startup
 from bot.storage import BotState, Storage
 from bot.storage import utc_now
 from bot.strategy import SignalAction, TrendRsiStrategy, add_indicators
@@ -25,10 +27,17 @@ class BacktestResult:
 
 
 class TradingEngine:
-    def __init__(self, config: BotConfig) -> None:
+    def __init__(
+        self,
+        config: BotConfig,
+        market_data: MarketDataProvider | None = None,
+        execution: ExecutionProvider | None = None,
+    ) -> None:
+        enforce_paper_trading_startup(config.trading_mode)
         self.config = config
         self.storage = Storage(config.database_path)
-        self.market = MarketDataClient(config.product_id)
+        self.market_data = market_data or create_market_data_provider(config)
+        self.execution = execution or create_execution_provider(config, self.storage)
         self.strategy = TrendRsiStrategy(
             ema_fast=config.ema_fast,
             ema_slow=config.ema_slow,
@@ -36,14 +45,16 @@ class TradingEngine:
             rsi_oversold=config.rsi_oversold,
             rsi_overbought=config.rsi_overbought,
         )
-        self.trader = PaperTrader(
-            storage=self.storage,
-            max_trade_eur=config.max_trade_eur,
-            stop_loss_pct=config.stop_loss_pct,
-            take_profit_pct=config.take_profit_pct,
-            fee_pct=config.fee_pct,
-            slippage_pct=config.slippage_pct,
-        )
+
+    @property
+    def market(self) -> MarketDataProvider:
+        """Compatibility alias used by the dashboard."""
+        return self.market_data
+
+    @property
+    def trader(self) -> ExecutionProvider:
+        """Compatibility alias used by run_bot.py."""
+        return self.execution
 
     def initialize(self) -> BotState:
         state = self.storage.ensure_state(self.config.start_capital_eur)
@@ -52,13 +63,13 @@ class TradingEngine:
 
     def tick(self) -> BotState:
         state = self.storage.ensure_state(self.config.start_capital_eur)
-        candles = self.market.fetch_candles(
+        candles = self.market_data.fetch_candles(
             granularity=self.config.candle_granularity,
             limit=self.config.candle_limit,
         )
-        spot_price = self.market.fetch_spot_price()
+        spot_price = self.market_data.fetch_spot_price()
 
-        risk_signal = self.trader.check_risk_exits(state, spot_price)
+        risk_signal = self.execution.check_risk_exits(state, spot_price)
         if risk_signal is not None:
             signal = risk_signal
         else:
@@ -77,11 +88,11 @@ class TradingEngine:
                 ema_slow=signal.ema_slow,
                 rsi=signal.rsi,
             )
-            state, result = self.trader.execute_signal(state, signal)
+            state, result = self.execution.execute_signal(state, signal)
             if not result.executed and signal.action != SignalAction.HOLD:
                 self.storage.add_log("info", result.message)
 
-        portfolio_value = self.trader.portfolio_value(state, spot_price)
+        portfolio_value = self.execution.portfolio_value(state, spot_price)
         self.storage.add_snapshot(
             price=spot_price,
             portfolio_value_eur=portfolio_value,
@@ -105,7 +116,7 @@ class TradingEngine:
         return self.storage.ensure_state(self.config.start_capital_eur)
 
     def get_indicator_frame(self) -> pd.DataFrame:
-        candles = self.market.fetch_candles(
+        candles = self.market_data.fetch_candles(
             granularity=self.config.candle_granularity,
             limit=self.config.candle_limit,
         )
@@ -118,9 +129,14 @@ class TradingEngine:
 
 
 class Backtester:
-    def __init__(self, config: BotConfig) -> None:
+    def __init__(
+        self,
+        config: BotConfig,
+        market_data: MarketDataProvider | None = None,
+    ) -> None:
+        enforce_paper_trading_startup(config.trading_mode)
         self.config = config
-        self.market = MarketDataClient(config.product_id)
+        self.market_data = market_data or create_market_data_provider(config)
         self.strategy = TrendRsiStrategy(
             ema_fast=config.ema_fast,
             ema_slow=config.ema_slow,
@@ -128,19 +144,20 @@ class Backtester:
             rsi_oversold=config.rsi_oversold,
             rsi_overbought=config.rsi_overbought,
         )
-        self.trader = PaperTrader(
-            storage=_NullStorage(),
-            max_trade_eur=config.max_trade_eur,
-            stop_loss_pct=config.stop_loss_pct,
-            take_profit_pct=config.take_profit_pct,
-            fee_pct=config.fee_pct,
-            slippage_pct=config.slippage_pct,
-        )
+        self.execution = create_execution_provider(config, storage=_NullStorage())
+
+    @property
+    def market(self) -> MarketDataProvider:
+        return self.market_data
+
+    @property
+    def trader(self) -> ExecutionProvider:
+        return self.execution
 
     def run(self, candles: pd.DataFrame | None = None) -> BacktestResult:
         frame = candles
         if frame is None:
-            frame = self.market.fetch_candles(
+            frame = self.market_data.fetch_candles(
                 granularity=self.config.candle_granularity,
                 limit=self.config.candle_limit,
             )
@@ -178,7 +195,7 @@ class Backtester:
                 realized_pnl_eur=0.0,
             )
 
-            risk_signal = self.trader.check_risk_exits(state, price)
+            risk_signal = self.execution.check_risk_exits(state, price)
             signal = risk_signal or self.strategy.evaluate(window, in_position=in_position)
             if signal.action in (SignalAction.BUY, SignalAction.SELL):
                 signal = signal.__class__(
@@ -190,7 +207,7 @@ class Backtester:
                     rsi=signal.rsi,
                 )
                 previous_cash = cash_eur
-                state, result = self.trader.execute_signal(state, signal)
+                state, result = self.execution.execute_signal(state, signal)
                 if result.executed:
                     if signal.action == SignalAction.SELL:
                         pnl = state.cash_eur - previous_cash

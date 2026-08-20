@@ -1,9 +1,16 @@
+app:
+  trading_mode: paper
+
 trading:
   product_id: BTC-EUR
   start_capital_eur: 50.0
+
+risk:
   max_trade_eur: 10.0
   stop_loss_pct: 1.5
   take_profit_pct: 3.0
+
+execution:
   fee_pct: 0.6
   slippage_pct: 0.05
 
