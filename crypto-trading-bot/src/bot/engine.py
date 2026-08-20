@@ -15,6 +15,8 @@ from bot.config import BotConfig
 from bot.data.base import MarketDataProvider
 from bot.execution.base import ExecutionProvider
 from bot.performance import PerformanceCalculator, PerformanceMetrics
+from bot.portfolio.ledger import PortfolioLedger
+from bot.risk.manager import RiskManager
 from bot.security import enforce_paper_trading_startup
 from bot.storage import BotState, Storage
 from bot.storage import utc_now
