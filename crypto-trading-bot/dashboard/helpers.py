@@ -178,4 +178,30 @@ def settings_rows(config: Any) -> list[tuple[str, str]]:
         ("RSI Period", str(config.rsi_period)),
         ("RSI Entry", str(config.rsi_entry)),
         ("RSI Exit", str(config.rsi_exit)),
+        ("Backtest Period", str(getattr(config, "backtest_period", "n/a"))),
+        ("Backtest Interval", str(getattr(config, "backtest_interval", "n/a"))),
     ]
+
+
+def format_backtest_summary(result: Any) -> dict[str, Any]:
+    """Thin prep for a future dashboard backtest view — no UI here."""
+    metrics = getattr(result, "metrics", None)
+    buy_hold = getattr(result, "buy_and_hold", None)
+    window = getattr(result, "window", None)
+    return {
+        "period": getattr(window, "period", None),
+        "interval": getattr(window, "interval", None),
+        "candle_count": getattr(result, "candle_count", 0),
+        "insufficient_data": getattr(result, "insufficient_data", False),
+        "strategy_return_pct": getattr(result, "total_return_pct", None),
+        "buy_and_hold_return_pct": (
+            None if buy_hold is None else buy_hold.total_return * 100.0
+        ),
+        "closed_trades": getattr(result, "total_trades", 0),
+        "sample_note": getattr(result, "sample_note", ""),
+        "max_drawdown_pct": getattr(result, "max_drawdown_pct", None),
+        "total_fees": None if metrics is None else metrics.total_fees,
+        "equity_curve_label": "Strategy Equity",
+        "benchmark_label": None if buy_hold is None else buy_hold.label,
+        "warnings": list(getattr(result, "warnings", [])),
+    }

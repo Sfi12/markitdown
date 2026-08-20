@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from bot.backtest.engine import ExtendedBacktestResult, StrategyBacktester
 from bot.bootstrap import (
     create_execution_provider,
     create_market_data_provider,
@@ -14,16 +15,18 @@ from bot.config import BotConfig
 from bot.data.base import MarketDataProvider
 from bot.execution.base import ExecutionProvider
 from bot.performance import PerformanceCalculator, PerformanceMetrics
-from bot.portfolio.ledger import PortfolioLedger
-from bot.risk.manager import RiskManager
 from bot.security import enforce_paper_trading_startup
 from bot.storage import BotState, Storage
 from bot.storage import utc_now
 from bot.strategy import EmaRsiStrategy, SignalAction, add_indicators
 
 
+# Backward-compatible alias used by older imports / dashboard smoke tests.
+BacktestResult = ExtendedBacktestResult
+
+
 @dataclass(frozen=True)
-class BacktestResult:
+class LegacyBacktestResult:
     start_capital_eur: float
     end_capital_eur: float
     total_return_pct: float
@@ -170,6 +173,8 @@ class TradingEngine:
 
 
 class Backtester:
+    """Thin wrapper around StrategyBacktester (Phase G). PAPER ONLY."""
+
     def __init__(
         self,
         config: BotConfig,
@@ -177,159 +182,27 @@ class Backtester:
     ) -> None:
         enforce_paper_trading_startup(config.trading_mode)
         self.config = config
-        self.market_data = market_data or create_market_data_provider(config)
-        self.risk = create_risk_manager(config)
-        self.portfolio = create_portfolio_ledger(config)
-        self.performance = PerformanceCalculator(
-            start_capital=config.start_capital_eur,
-            timezone_name=config.timezone,
-        )
-        self.strategy = EmaRsiStrategy(
-            ema_fast=config.ema_fast,
-            ema_slow=config.ema_slow,
-            rsi_period=config.rsi_period,
-            rsi_entry=config.rsi_entry,
-            rsi_exit=config.rsi_exit,
-        )
-        self.execution = create_execution_provider(
-            config,
-            storage=_NullStorage(),
-            risk=self.risk,
-            portfolio=self.portfolio,
-        )
+        self._inner = StrategyBacktester(config, market_data=market_data)
 
     @property
     def market(self) -> MarketDataProvider:
-        return self.market_data
+        return self._inner.market_data
+
+    @property
+    def market_data(self) -> MarketDataProvider:
+        return self._inner.market_data
 
     @property
     def trader(self) -> ExecutionProvider:
-        return self.execution
+        return self._inner.execution
+
+    @property
+    def strategy(self) -> EmaRsiStrategy:
+        return self._inner.strategy
 
     def run(self, candles: pd.DataFrame | None = None) -> BacktestResult:
-        frame = candles
-        if frame is None:
-            frame = self.market_data.fetch_candles(
-                granularity=self.config.candle_granularity,
-                limit=self.config.candle_limit,
-            )
-        enriched = add_indicators(
-            frame,
-            self.config.ema_fast,
-            self.config.ema_slow,
-            self.config.rsi_period,
+        return self._inner.run(
+            candles=candles,
+            period=self.config.backtest_period,
+            interval=self.config.backtest_interval,
         )
-
-        cash_eur = self.config.start_capital_eur
-        btc_amount = 0.0
-        entry_price: float | None = None
-        in_position = False
-        trades: list[dict[str, float | str]] = []
-        sell_pnls: list[float] = []
-        total_fees = 0.0
-        equity_curve: list[float] = [self.config.start_capital_eur]
-        winning = 0
-        losing = 0
-
-        warmup = max(self.config.ema_slow, self.config.rsi_period) + 2
-        for index in range(warmup, len(enriched)):
-            window = enriched.iloc[: index + 1].copy()
-            price = float(window.iloc[-1]["close"])
-            state = BotState(
-                cash_eur=cash_eur,
-                btc_amount=btc_amount,
-                entry_price=entry_price,
-                in_position=in_position,
-                is_running=True,
-                last_price=price,
-                last_signal="",
-                last_update=None,
-                total_trades=len(trades),
-                realized_pnl_eur=sum(sell_pnls),
-            )
-
-            risk_signal = self.risk.check_exits(state, price)
-            signal = risk_signal or self.strategy.evaluate(
-                window,
-                in_position=in_position,
-                exclude_open_candle=False,
-            )
-            if signal.action in (SignalAction.BUY, SignalAction.SELL):
-                signal = signal.__class__(
-                    action=signal.action,
-                    reason=signal.reason,
-                    price=price,
-                    ema_fast=signal.ema_fast,
-                    ema_slow=signal.ema_slow,
-                    rsi=signal.rsi,
-                )
-                state, result = self.execution.execute_signal(state, signal)
-                if result.executed and result.fill is not None:
-                    fill = result.fill
-                    total_fees += fill.fee
-                    if signal.action == SignalAction.SELL:
-                        pnl = float(fill.pnl)
-                        sell_pnls.append(pnl)
-                        if pnl >= 0:
-                            winning += 1
-                        else:
-                            losing += 1
-                        trades.append(
-                            {
-                                "timestamp": str(window.iloc[-1]["timestamp"]),
-                                "side": "sell",
-                                "price": price,
-                                "pnl_eur": pnl,
-                                "fee": fill.fee,
-                                "reason": signal.reason,
-                            }
-                        )
-                    else:
-                        trades.append(
-                            {
-                                "timestamp": str(window.iloc[-1]["timestamp"]),
-                                "side": "buy",
-                                "price": price,
-                                "pnl_eur": 0.0,
-                                "fee": fill.fee,
-                                "reason": signal.reason,
-                            }
-                        )
-                    cash_eur = state.cash_eur
-                    btc_amount = state.btc_amount
-                    entry_price = state.entry_price
-                    in_position = state.in_position
-
-            portfolio_value = cash_eur + (btc_amount * price)
-            equity_curve.append(portfolio_value)
-
-        final_price = float(enriched.iloc[-1]["close"])
-        end_capital = cash_eur + (btc_amount * final_price)
-        metrics = self.performance.from_backtest_trades(
-            start_capital=self.config.start_capital_eur,
-            end_capital=end_capital,
-            sell_pnls=sell_pnls,
-            total_fees=total_fees,
-            equity_curve=equity_curve,
-        )
-        total_return_pct = (metrics.total_return or 0.0) * 100.0
-
-        return BacktestResult(
-            start_capital_eur=self.config.start_capital_eur,
-            end_capital_eur=end_capital,
-            total_return_pct=total_return_pct,
-            total_trades=len(sell_pnls),
-            winning_trades=winning,
-            losing_trades=losing,
-            max_drawdown_pct=metrics.max_drawdown_pct or 0.0,
-            trades=trades,
-            metrics=metrics,
-        )
-
-
-class _NullStorage:
-    def add_trade(self, trade: object) -> None:
-        return None
-
-    def add_log(self, level: str, message: str) -> None:
-        return None

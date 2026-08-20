@@ -26,6 +26,10 @@ data:
   candle_granularity: 3600
   candle_limit: 300
 
+backtest:
+  period: 1M
+  interval: 1h
+
 bot:
   poll_interval_seconds: 60
 

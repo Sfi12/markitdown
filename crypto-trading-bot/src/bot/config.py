@@ -51,6 +51,12 @@ class MarketDataConfig:
 
 
 @dataclass(frozen=True)
+class BacktestConfig:
+    period: str
+    interval: str
+
+
+@dataclass(frozen=True)
 class BotConfig:
     app: AppConfig
     trading: TradingConfig
@@ -58,6 +64,7 @@ class BotConfig:
     execution: ExecutionConfig
     strategy: StrategyConfig
     market_data: MarketDataConfig
+    backtest: BacktestConfig
     poll_interval_seconds: int
     database_path: Path
 
@@ -135,6 +142,14 @@ class BotConfig:
     def candle_limit(self) -> int:
         return self.market_data.candle_limit
 
+    @property
+    def backtest_period(self) -> str:
+        return self.backtest.period
+
+    @property
+    def backtest_interval(self) -> str:
+        return self.backtest.interval
+
     @classmethod
     def load(cls, path: Path | None = None) -> BotConfig:
         config_path = path or Path(__file__).resolve().parents[2] / "config.yaml"
@@ -150,6 +165,7 @@ class BotConfig:
 
         risk_raw = raw.get("risk", {})
         execution_raw = raw.get("execution", {})
+        backtest_raw = raw.get("backtest", {})
 
         trading_mode = os.environ.get(
             TRADING_MODE_ENV,
@@ -196,6 +212,10 @@ class BotConfig:
             market_data=MarketDataConfig(
                 candle_granularity=int(data_raw["candle_granularity"]),
                 candle_limit=int(data_raw["candle_limit"]),
+            ),
+            backtest=BacktestConfig(
+                period=str(backtest_raw.get("period", "1M")),
+                interval=str(backtest_raw.get("interval", "1h")),
             ),
             poll_interval_seconds=int(bot_raw["poll_interval_seconds"]),
             database_path=db_path,
