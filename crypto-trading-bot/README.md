@@ -31,6 +31,20 @@ pip install -r requirements.txt
 
 ## Schnellstart
 
+### Desktop-Icon (Bot + Dashboard mit einem Klick)
+
+```bash
+cd crypto-trading-bot
+chmod +x install_desktop_icon.sh start_paper_trading.sh stop_paper_trading.sh
+./install_desktop_icon.sh
+```
+
+Danach auf dem Desktop **„Paper Trading starten“** doppelklicken.
+
+- **macOS:** auch `Paper Trading starten.command` direkt doppelklicken (beim ersten Mal: Rechtsklick → Öffnen)
+- **Windows:** `start_paper_trading.bat` doppelklicken
+- **Stoppen:** `stop_paper_trading.sh` bzw. `stop_paper_trading.bat`
+
 ### Dashboard starten (empfohlen für den ersten Test)
 
 ```bash

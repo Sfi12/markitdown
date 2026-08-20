@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Paper Trading starten
+Comment=Startet den Paper-Trading-Bot und öffnet das Dashboard (PAPER ONLY)
+Exec=bash -c 'cd "$(dirname "$(readlink -f "%k" 2>/dev/null || realpath "%k" 2>/dev/null || echo "$0")")" 2>/dev/null; ROOT="$(dirname "$(readlink -f "$0")")"; cd "$ROOT"; ./start_paper_trading.sh'
+Icon=assets/paper-trading-icon.png
+Terminal=true
+Categories=Finance;Utility;
+StartupNotify=true
